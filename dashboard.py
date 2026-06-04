@@ -135,7 +135,7 @@ if selected_page == 'Dashboard':
 
     with col1:
         st.markdown('### Vehicle Detection Over Time')
-        hours = pd.date_range(start=datetime.now().replace(hour=0, minute=0, second=0, microsecond=0), periods=24, freq='H')
+        hours = pd.date_range(start=datetime.now().replace(hour=0, minute=0, second=0, microsecond=0), periods=24, freq='h')
         vehicle_counts = np.random.randint(100, 300, 24)
         detection_df = pd.DataFrame({'Time': hours, 'Vehicles': vehicle_counts})
         fig = px.line(detection_df, x='Time', y='Vehicles', markers=True, title='24-Hour Detection Trend')
