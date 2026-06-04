@@ -1,0 +1,9 @@
+opencv-python
+numpy
+pygame
+pyserial
+streamlit
+pandas
+Pillow
+plotly
+scipy
