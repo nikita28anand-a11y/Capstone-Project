@@ -4,6 +4,9 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
+import cv2
+import time
+import os
 
 st.set_page_config(
     page_title='AI Automotive Safety Dashboard',
@@ -317,47 +320,130 @@ elif selected_page == 'Alerts':
 elif selected_page == 'Live Feed':
     st.markdown('## Live Video Feed & Monitoring')
     st.info('Note: Live feed requires a connected camera or video stream.')
+
     col1, col2 = st.columns(2)
     with col1:
-        st.subheader('Camera 1: Main Road')
-        st.image('https://via.placeholder.com/640x480?text=Camera1', use_column_width=True)
-        sub1, sub2, sub3 = st.columns(3)
-        with sub1:
-            st.metric('FPS', '30')
-        with sub2:
-            st.metric('Resolution', '1920x1080')
-        with sub3:
-            st.metric('Status', 'Active')
-    with col2:
-        st.subheader('Camera 2: Intersection')
-        st.image('https://via.placeholder.com/640x480?text=Camera2', use_column_width=True)
-        sub1, sub2, sub3 = st.columns(3)
-        with sub1:
-            st.metric('FPS', '30')
-        with sub2:
-            st.metric('Resolution', '1280x720')
-        with sub3:
-            st.metric('Status', 'Active')
-    st.markdown('---')
-    st.markdown('### Detection Controls')
-    col1, col2, col3 = st.columns(3)
-    with col1:
+        st.subheader('Camera Source')
+        src_input = st.text_input('Enter camera index (0) or RTSP/HTTP URL or file path', '0')
+        start_btn = st.button('Start Stream')
+        stop_btn = st.button('Stop Stream')
         confidence_threshold = st.slider('Confidence Threshold', 0.0, 1.0, 0.7)
+        enable_tracking = st.checkbox('Enable Object Tracking', value=True)
+
     with col2:
-        st.selectbox('Detection Model', ['YOLOv3', 'YOLOv4', 'YOLOv5', 'Custom Model'])
-    with col3:
-        st.checkbox('Enable Object Tracking', value=True)
+        st.subheader('Stream Info')
+        fps_metric = st.empty()
+        res_metric = st.empty()
+        status_metric = st.empty()
+
     st.markdown('---')
-    st.markdown('### Real-Time Statistics')
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric('Frames Processed', '45,234')
-    with col2:
-        st.metric('Objects Detected', '1,247')
-    with col3:
-        st.metric('Avg Latency', '45ms')
-    with col4:
-        st.metric('GPU Usage', '78%')
+
+    if 'streaming' not in st.session_state:
+        st.session_state.streaming = False
+
+    if start_btn:
+        st.session_state.streaming = True
+
+    if stop_btn:
+        st.session_state.streaming = False
+
+    # Prepare model files
+    model_cfg = os.path.join('models', 'yolov3.cfg')
+    model_weights = os.path.join('models', 'yolov3.weights')
+    names_path = os.path.join('models', 'coco.names')
+
+    yolo_available = os.path.exists(model_cfg) and os.path.exists(model_weights) and os.path.exists(names_path)
+
+    if not yolo_available:
+        st.warning('YOLO model files not found in the models/ directory. Showing placeholder images.')
+
+    placeholder = st.empty()
+
+    if st.session_state.streaming:
+        # Determine source
+        try:
+            src = int(src_input)
+        except Exception:
+            src = src_input
+
+        cap = cv2.VideoCapture(src)
+
+        net = None
+        output_layers = None
+        labels = []
+
+        if yolo_available:
+            labels = open(names_path).read().strip().split('\n')
+            net = cv2.dnn.readNet(model_weights, model_cfg)
+            layer_names = net.getLayerNames()
+            try:
+                output_layers = [layer_names[i - 1] for i in net.getUnconnectedOutLayers().flatten()]
+            except Exception:
+                output_layers = [layer_names[i[0] - 1] for i in net.getUnconnectedOutLayers()]
+
+        frames = 0
+        start_time = time.time()
+
+        while st.session_state.streaming and cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            frames += 1
+
+            if yolo_available and net is not None:
+                (H, W) = frame.shape[:2]
+                blob = cv2.dnn.blobFromImage(frame, 1/255.0, (416, 416), swapRB=True, crop=False)
+                net.setInput(blob)
+                layerOutputs = net.forward(output_layers)
+
+                boxes = []
+                confidences = []
+                classIDs = []
+
+                for output in layerOutputs:
+                    for detection in output:
+                        scores = detection[5:]
+                        classID = int(np.argmax(scores))
+                        confidence = float(scores[classID])
+
+                        if confidence > confidence_threshold:
+                            box = detection[0:4] * np.array([W, H, W, H])
+                            (centerX, centerY, width, height) = box.astype('int')
+                            x = int(centerX - (width / 2))
+                            y = int(centerY - (height / 2))
+                            boxes.append([x, y, int(width), int(height)])
+                            confidences.append(float(confidence))
+                            classIDs.append(classID)
+
+                idxs = cv2.dnn.NMSBoxes(boxes, confidences, confidence_threshold, 0.4)
+
+                if len(idxs) > 0:
+                    for i in idxs.flatten():
+                        (x, y) = (boxes[i][0], boxes[i][1])
+                        (w, h) = (boxes[i][2], boxes[i][3])
+                        color = (0, 255, 0)
+                        cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
+                        text = f"{labels[classIDs[i]]}: {confidences[i]:.2f}"
+                        cv2.putText(frame, text, (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+            # Update metrics
+            elapsed = time.time() - start_time if start_time else 0.001
+            fps = frames / elapsed if elapsed > 0 else 0
+            fps_metric.metric('FPS', f"{fps:.1f}")
+            res_metric.metric('Resolution', f"{frame.shape[1]}x{frame.shape[0]}")
+            status_metric.metric('Status', 'Streaming')
+
+            # Convert and display
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            placeholder.image(frame_rgb, use_column_width=True)
+
+            # small sleep to yield control
+            time.sleep(0.01)
+
+        cap.release()
+        status_metric.metric('Status', 'Stopped')
+        st.session_state.streaming = False
 
 elif selected_page == 'Settings':
     st.markdown('## System Settings & Configuration')
