@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 from datetime import datetime
 import time
 import os
+# OpenCV import is moved to Live Feed section for headless environment support
 
 st.set_page_config(
     page_title='AI Automotive Safety Dashboard',
