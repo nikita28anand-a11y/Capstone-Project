@@ -4,7 +4,6 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
-import cv2
 import time
 import os
 
@@ -153,7 +152,7 @@ if selected_page == 'Dashboard':
             yaxis=dict(title_font=dict(color=plot_font_color), tickfont=dict(color=plot_font_color)),
             legend=dict(font=dict(color=plot_font_color))
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
     with col2:
         st.markdown('### Traffic Density Distribution')
@@ -168,7 +167,7 @@ if selected_page == 'Dashboard':
             title=dict(font=dict(color=plot_font_color)),
             legend=dict(font=dict(color=plot_font_color))
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
     st.markdown('---')
     st.markdown('## Recent Detections')
@@ -179,7 +178,7 @@ if selected_page == 'Dashboard':
         'Status': ['Safe', 'Warning', 'Safe', 'Safe', 'Safe', 'Safe', 'Safe', 'Safe', 'Warning', 'Safe']
     }
     detection_table = pd.DataFrame(detection_data)
-    st.dataframe(detection_table, use_container_width=True, hide_index=True)
+    st.dataframe(detection_table, width='stretch', hide_index=True)
 
     st.markdown('---')
     st.markdown('## System Information')
@@ -220,7 +219,7 @@ elif selected_page == 'Analytics':
         legend=dict(font=dict(color=plot_font_color)),
         hovermode='x unified'
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
     st.markdown('---')
     col1, col2 = st.columns(2)
     with col1:
@@ -237,7 +236,7 @@ elif selected_page == 'Analytics':
             yaxis=dict(title_font=dict(color=plot_font_color), tickfont=dict(color=plot_font_color)),
             legend=dict(font=dict(color=plot_font_color))
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
     with col2:
         st.subheader('Detection Confidence Distribution')
         confidence_ranges = ['80-85%', '85-90%', '90-95%', '95-100%']
@@ -252,7 +251,7 @@ elif selected_page == 'Analytics':
             yaxis=dict(title_font=dict(color=plot_font_color), tickfont=dict(color=plot_font_color)),
             legend=dict(font=dict(color=plot_font_color))
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
 elif selected_page == 'Alerts':
     st.markdown('## Safety Alerts & Incidents')
@@ -282,7 +281,7 @@ elif selected_page == 'Alerts':
         'Action': ['Review', 'Monitor', 'Ignore', 'Report', 'Archived']
     }
     alerts_df = pd.DataFrame(alerts_data)
-    st.dataframe(alerts_df, use_container_width=True, hide_index=True)
+    st.dataframe(alerts_df, width='stretch', hide_index=True)
     st.markdown('---')
     col1, col2 = st.columns(2)
     with col1:
@@ -300,7 +299,7 @@ elif selected_page == 'Alerts':
             yaxis=dict(title_font=dict(color=plot_font_color), tickfont=dict(color=plot_font_color)),
             legend=dict(font=dict(color=plot_font_color))
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
     with col2:
         st.subheader('Alert Severity Distribution')
         severity = ['Critical', 'High', 'Medium', 'Low']
@@ -315,7 +314,7 @@ elif selected_page == 'Alerts':
             title=dict(font=dict(color=plot_font_color)),
             legend=dict(font=dict(color=plot_font_color))
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
 elif selected_page == 'Live Feed':
     st.markdown('## Live Video Feed & Monitoring')
@@ -360,90 +359,98 @@ elif selected_page == 'Live Feed':
     placeholder = st.empty()
 
     if st.session_state.streaming:
-        # Determine source
+        # Import cv2 only when needed (for headless environments)
         try:
-            src = int(src_input)
-        except Exception:
-            src = src_input
-
-        cap = cv2.VideoCapture(src)
-
-        net = None
-        output_layers = None
-        labels = []
-
-        if yolo_available:
-            labels = open(names_path).read().strip().split('\n')
-            net = cv2.dnn.readNet(model_weights, model_cfg)
-            layer_names = net.getLayerNames()
+            import cv2
+        except ImportError:
+            st.error('OpenCV (cv2) is not available in this environment. Live feed requires OpenCV.')
+            st.session_state.streaming = False
+        
+        if st.session_state.streaming:  # Only proceed if cv2 imported successfully
+            # Determine source
             try:
-                output_layers = [layer_names[i - 1] for i in net.getUnconnectedOutLayers().flatten()]
+                src = int(src_input)
             except Exception:
-                output_layers = [layer_names[i[0] - 1] for i in net.getUnconnectedOutLayers()]
+                src = src_input
 
-        frames = 0
-        start_time = time.time()
+            cap = cv2.VideoCapture(src)
 
-        while st.session_state.streaming and cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
+            net = None
+            output_layers = None
+            labels = []
 
-            frames += 1
+            if yolo_available:
+                labels = open(names_path).read().strip().split('\n')
+                net = cv2.dnn.readNet(model_weights, model_cfg)
+                layer_names = net.getLayerNames()
+                try:
+                    output_layers = [layer_names[i - 1] for i in net.getUnconnectedOutLayers().flatten()]
+                except Exception:
+                    output_layers = [layer_names[i[0] - 1] for i in net.getUnconnectedOutLayers()]
 
-            if yolo_available and net is not None:
-                (H, W) = frame.shape[:2]
-                blob = cv2.dnn.blobFromImage(frame, 1/255.0, (416, 416), swapRB=True, crop=False)
-                net.setInput(blob)
-                layerOutputs = net.forward(output_layers)
+            frames = 0
+            start_time = time.time()
 
-                boxes = []
-                confidences = []
-                classIDs = []
+            while st.session_state.streaming and cap.isOpened():
+                ret, frame = cap.read()
+                if not ret:
+                    break
 
-                for output in layerOutputs:
-                    for detection in output:
-                        scores = detection[5:]
-                        classID = int(np.argmax(scores))
-                        confidence = float(scores[classID])
+                frames += 1
 
-                        if confidence > confidence_threshold:
-                            box = detection[0:4] * np.array([W, H, W, H])
-                            (centerX, centerY, width, height) = box.astype('int')
-                            x = int(centerX - (width / 2))
-                            y = int(centerY - (height / 2))
-                            boxes.append([x, y, int(width), int(height)])
-                            confidences.append(float(confidence))
-                            classIDs.append(classID)
+                if yolo_available and net is not None:
+                    (H, W) = frame.shape[:2]
+                    blob = cv2.dnn.blobFromImage(frame, 1/255.0, (416, 416), swapRB=True, crop=False)
+                    net.setInput(blob)
+                    layerOutputs = net.forward(output_layers)
 
-                idxs = cv2.dnn.NMSBoxes(boxes, confidences, confidence_threshold, 0.4)
+                    boxes = []
+                    confidences = []
+                    classIDs = []
 
-                if len(idxs) > 0:
-                    for i in idxs.flatten():
-                        (x, y) = (boxes[i][0], boxes[i][1])
-                        (w, h) = (boxes[i][2], boxes[i][3])
-                        color = (0, 255, 0)
-                        cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
-                        text = f"{labels[classIDs[i]]}: {confidences[i]:.2f}"
-                        cv2.putText(frame, text, (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                    for output in layerOutputs:
+                        for detection in output:
+                            scores = detection[5:]
+                            classID = int(np.argmax(scores))
+                            confidence = float(scores[classID])
 
-            # Update metrics
-            elapsed = time.time() - start_time if start_time else 0.001
-            fps = frames / elapsed if elapsed > 0 else 0
-            fps_metric.metric('FPS', f"{fps:.1f}")
-            res_metric.metric('Resolution', f"{frame.shape[1]}x{frame.shape[0]}")
-            status_metric.metric('Status', 'Streaming')
+                            if confidence > confidence_threshold:
+                                box = detection[0:4] * np.array([W, H, W, H])
+                                (centerX, centerY, width, height) = box.astype('int')
+                                x = int(centerX - (width / 2))
+                                y = int(centerY - (height / 2))
+                                boxes.append([x, y, int(width), int(height)])
+                                confidences.append(float(confidence))
+                                classIDs.append(classID)
 
-            # Convert and display
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            placeholder.image(frame_rgb, use_column_width=True)
+                    idxs = cv2.dnn.NMSBoxes(boxes, confidences, confidence_threshold, 0.4)
 
-            # small sleep to yield control
-            time.sleep(0.01)
+                    if len(idxs) > 0:
+                        for i in idxs.flatten():
+                            (x, y) = (boxes[i][0], boxes[i][1])
+                            (w, h) = (boxes[i][2], boxes[i][3])
+                            color = (0, 255, 0)
+                            cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
+                            text = f"{labels[classIDs[i]]}: {confidences[i]:.2f}"
+                            cv2.putText(frame, text, (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-        cap.release()
-        status_metric.metric('Status', 'Stopped')
-        st.session_state.streaming = False
+                # Update metrics
+                elapsed = time.time() - start_time if start_time else 0.001
+                fps = frames / elapsed if elapsed > 0 else 0
+                fps_metric.metric('FPS', f"{fps:.1f}")
+                res_metric.metric('Resolution', f"{frame.shape[1]}x{frame.shape[0]}")
+                status_metric.metric('Status', 'Streaming')
+
+                # Convert and display
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                placeholder.image(frame_rgb, width='stretch')
+
+                # small sleep to yield control
+                time.sleep(0.01)
+
+            cap.release()
+            status_metric.metric('Status', 'Stopped')
+            st.session_state.streaming = False
 
 elif selected_page == 'Settings':
     st.markdown('## System Settings & Configuration')
@@ -503,7 +510,7 @@ elif selected_page == 'Data Export':
         'Download': ['Ready', 'Ready', 'Ready', 'Ready']
     }
     export_df = pd.DataFrame(export_data)
-    st.dataframe(export_df, use_container_width=True, hide_index=True)
+    st.dataframe(export_df, width='stretch', hide_index=True)
     st.markdown('---')
     st.markdown('''
     <div class='footer-premium'>
