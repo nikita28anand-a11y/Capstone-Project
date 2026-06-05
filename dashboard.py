@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 from datetime import datetime
 import time
 import os
+import tempfile
 # OpenCV import is moved to Live Feed section for headless environment support
 
 st.set_page_config(
@@ -319,12 +320,22 @@ elif selected_page == 'Alerts':
 
 elif selected_page == 'Live Feed':
     st.markdown('## Live Video Feed & Monitoring')
-    st.info('Note: Live feed requires a connected camera or video stream.')
+    st.info('Note: Live feed requires a connected camera or video stream. Local webcams are not available on Streamlit Cloud.')
 
     col1, col2 = st.columns(2)
     with col1:
-        st.subheader('Camera Source')
-        src_input = st.text_input('Enter camera index (0) or RTSP/HTTP URL or file path', '0')
+        st.subheader('Stream Source')
+        source_type = st.selectbox('Source Type', ['Camera', 'Video File', 'RTSP/HTTP URL'])
+        video_upload = None
+        if source_type == 'Camera':
+            src_input = st.text_input('Enter camera index', '0')
+            st.info('Camera source works only on local devices. On Streamlit Cloud, use a video file or URL.')
+        elif source_type == 'Video File':
+            video_upload = st.file_uploader('Upload a video file', type=['mp4', 'avi', 'mov', 'mkv'])
+            src_input = ''
+        else:
+            src_input = st.text_input('Enter RTSP/HTTP URL', '')
+
         start_btn = st.button('Start Stream')
         stop_btn = st.button('Stop Stream')
         confidence_threshold = st.slider('Confidence Threshold', 0.0, 1.0, 0.7)
@@ -366,92 +377,110 @@ elif selected_page == 'Live Feed':
         except ImportError:
             st.error('OpenCV (cv2) is not available in this environment. Live feed requires OpenCV.')
             st.session_state.streaming = False
-        
+
         if st.session_state.streaming:  # Only proceed if cv2 imported successfully
             # Determine source
-            try:
-                src = int(src_input)
-            except Exception:
-                src = src_input
-
-            cap = cv2.VideoCapture(src)
-
-            net = None
-            output_layers = None
-            labels = []
-
-            if yolo_available:
-                labels = open(names_path).read().strip().split('\n')
-                net = cv2.dnn.readNet(model_weights, model_cfg)
-                layer_names = net.getLayerNames()
+            source_path = None
+            if source_type == 'Video File':
+                if video_upload is None:
+                    st.error('Please upload a video file before starting the stream.')
+                    st.session_state.streaming = False
+                else:
+                    suffix = os.path.splitext(video_upload.name)[1]
+                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+                    temp_file.write(video_upload.read())
+                    temp_file.close()
+                    source_path = temp_file.name
+            elif source_type == 'Camera':
                 try:
-                    output_layers = [layer_names[i - 1] for i in net.getUnconnectedOutLayers().flatten()]
+                    source_path = int(src_input)
                 except Exception:
-                    output_layers = [layer_names[i[0] - 1] for i in net.getUnconnectedOutLayers()]
+                    source_path = src_input
+            else:
+                source_path = src_input
 
-            frames = 0
-            start_time = time.time()
+            if st.session_state.streaming:
+                cap = cv2.VideoCapture(source_path)
+                if not cap.isOpened():
+                    st.error('Could not open the selected video source. On Streamlit Cloud, local webcams are unavailable. Use a video file or RTSP/HTTP URL instead.')
+                    st.session_state.streaming = False
+                else:
+                    net = None
+                    output_layers = None
+                    labels = []
 
-            while st.session_state.streaming and cap.isOpened():
-                ret, frame = cap.read()
-                if not ret:
-                    break
+                    if yolo_available:
+                        labels = open(names_path).read().strip().split('\n')
+                        net = cv2.dnn.readNet(model_weights, model_cfg)
+                        layer_names = net.getLayerNames()
+                        try:
+                            output_layers = [layer_names[i - 1] for i in net.getUnconnectedOutLayers().flatten()]
+                        except Exception:
+                            output_layers = [layer_names[i[0] - 1] for i in net.getUnconnectedOutLayers()]
 
-                frames += 1
+                    frames = 0
+                    start_time = time.time()
 
-                if yolo_available and net is not None:
-                    (H, W) = frame.shape[:2]
-                    blob = cv2.dnn.blobFromImage(frame, 1/255.0, (416, 416), swapRB=True, crop=False)
-                    net.setInput(blob)
-                    layerOutputs = net.forward(output_layers)
+                    while st.session_state.streaming and cap.isOpened():
+                        ret, frame = cap.read()
+                        if not ret:
+                            break
 
-                    boxes = []
-                    confidences = []
-                    classIDs = []
+                        frames += 1
 
-                    for output in layerOutputs:
-                        for detection in output:
-                            scores = detection[5:]
-                            classID = int(np.argmax(scores))
-                            confidence = float(scores[classID])
+                        if yolo_available and net is not None:
+                            (H, W) = frame.shape[:2]
+                            blob = cv2.dnn.blobFromImage(frame, 1/255.0, (416, 416), swapRB=True, crop=False)
+                            net.setInput(blob)
+                            layerOutputs = net.forward(output_layers)
 
-                            if confidence > confidence_threshold:
-                                box = detection[0:4] * np.array([W, H, W, H])
-                                (centerX, centerY, width, height) = box.astype('int')
-                                x = int(centerX - (width / 2))
-                                y = int(centerY - (height / 2))
-                                boxes.append([x, y, int(width), int(height)])
-                                confidences.append(float(confidence))
-                                classIDs.append(classID)
+                            boxes = []
+                            confidences = []
+                            classIDs = []
 
-                    idxs = cv2.dnn.NMSBoxes(boxes, confidences, confidence_threshold, 0.4)
+                            for output in layerOutputs:
+                                for detection in output:
+                                    scores = detection[5:]
+                                    classID = int(np.argmax(scores))
+                                    confidence = float(scores[classID])
 
-                    if len(idxs) > 0:
-                        for i in idxs.flatten():
-                            (x, y) = (boxes[i][0], boxes[i][1])
-                            (w, h) = (boxes[i][2], boxes[i][3])
-                            color = (0, 255, 0)
-                            cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
-                            text = f"{labels[classIDs[i]]}: {confidences[i]:.2f}"
-                            cv2.putText(frame, text, (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                                    if confidence > confidence_threshold:
+                                        box = detection[0:4] * np.array([W, H, W, H])
+                                        (centerX, centerY, width, height) = box.astype('int')
+                                        x = int(centerX - (width / 2))
+                                        y = int(centerY - (height / 2))
+                                        boxes.append([x, y, int(width), int(height)])
+                                        confidences.append(float(confidence))
+                                        classIDs.append(classID)
 
-                # Update metrics
-                elapsed = time.time() - start_time if start_time else 0.001
-                fps = frames / elapsed if elapsed > 0 else 0
-                fps_metric.metric('FPS', f"{fps:.1f}")
-                res_metric.metric('Resolution', f"{frame.shape[1]}x{frame.shape[0]}")
-                status_metric.metric('Status', 'Streaming')
+                            idxs = cv2.dnn.NMSBoxes(boxes, confidences, confidence_threshold, 0.4)
 
-                # Convert and display
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                placeholder.image(frame_rgb, width='stretch')
+                            if len(idxs) > 0:
+                                for i in idxs.flatten():
+                                    (x, y) = (boxes[i][0], boxes[i][1])
+                                    (w, h) = (boxes[i][2], boxes[i][3])
+                                    color = (0, 255, 0)
+                                    cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
+                                    text = f"{labels[classIDs[i]]}: {confidences[i]:.2f}"
+                                    cv2.putText(frame, text, (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-                # small sleep to yield control
-                time.sleep(0.01)
+                        # Update metrics
+                        elapsed = time.time() - start_time if start_time else 0.001
+                        fps = frames / elapsed if elapsed > 0 else 0
+                        fps_metric.metric('FPS', f"{fps:.1f}")
+                        res_metric.metric('Resolution', f"{frame.shape[1]}x{frame.shape[0]}")
+                        status_metric.metric('Status', 'Streaming')
 
-            cap.release()
-            status_metric.metric('Status', 'Stopped')
-            st.session_state.streaming = False
+                        # Convert and display
+                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        placeholder.image(frame_rgb, width='stretch')
+
+                        # small sleep to yield control
+                        time.sleep(0.01)
+
+                    cap.release()
+                    status_metric.metric('Status', 'Stopped')
+                    st.session_state.streaming = False
 
 elif selected_page == 'Settings':
     st.markdown('## System Settings & Configuration')
